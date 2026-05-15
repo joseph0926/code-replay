@@ -2,9 +2,11 @@
 
 AI로 만든 내 PR/diff를 사후에 본인 머리로 한 번 더 통과시키는 spaced 학습 큐로 변환하는 로컬 도구의 리서치 저장소.
 
-## 주제
+## 주제와 방향
 
 - docs/topic.md
+- docs/product-direction.md
+- docs/mvp-spec.md
 
 ## 추가 리서치
 

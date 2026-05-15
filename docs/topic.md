@@ -1,53 +1,79 @@
 # AI 시대의 개발 학습 복구 리서치
 
-## 문제
+## 문서 역할
 
-AI가 코드를 대부분 작성하면 결과물은 빨리 나오지만, 내가 직접 코드를 작성하려 할 때 막힌다. 학습을 해도 실제 코드 변경, 개념, 설계 판단이 머릿속에 체계적으로 쌓이지 않는다.
+이 문서는 Code Replay의 초기 문제의식과 리서치 맥락을 정리하는 주제 문서다.
 
-이 직관은 2026년 시점에서 실증 근거를 얻었다. AI 사용 그룹의 사후 quiz 점수가 대조군 대비 평균 **-17%**로 보고됐고, 순수 delegation이 가장 낮은 점수였다(`docs/ai-learning-impact.md` §3). The Augmentation Trap 논문은 이 현상을 "performance-extracting deployment"로 부르고, 처방으로 **structured unassisted practice**(자동조종 시대의 hand-flying 비유)를 제시한다. code-replay는 이 처방의 product 형태다.
+현재 확정된 제품 방향은 `docs/product-direction.md`, P0 실행 계약은 `docs/mvp-spec.md`를 기준으로 한다. 향후 `README.md`가 생기면 외부 소개, 빠른 시작, 사용법은 README가 맡고, 이 문서는 리서치 배경과 문서 지도를 유지한다.
 
-## 가능한 MVP
+## 초기 문제
 
-로컬 repo에서 git diff나 PR patch를 읽어 다음을 생성한다. 학습 과학 근거 강도에 따른 우선순위를 함께 표시한다(상세 정당화: `docs/learning-science.md` §6).
+AI agent가 코드 변경을 빠르게 만들수록 개발자가 그 변경을 자기 머리로 충분히 통과시키지 못하는 간극이 생길 수 있다. 결과물은 빨리 나오지만, 나중에 같은 변경을 직접 구현하거나 설명하려 할 때 막히는 문제가 남는다.
 
-1. **[P0] "처음부터 다시 구현하기" 단계별 과제** — generation effect(d≈0.40) + Parsons 계열 + arxiv 2603.11103 "Understanding by Reconstruction"의 인간 학습 버전. AI 솔루션은 hint로만, 본인이 먼저 짠다.
-2. **[P0] 빈칸 채우기 문제** — micro Parsons + fill-in-the-blank. 자동 생성이 production-grade에 도달(MDPI Electronics 2025). 단 **전략적 위치(invariant / boundary / contract)에만 빈칸**, 랜덤 토큰 마스킹은 효과 없음.
-3. **[P0] 다음 복습 질문** — LLM 생성 retrieval practice의 +16pp RCT 근거. **단발 출제 X, spaced 큐 필수.** Anki/Hashcards 스타일 SRS 백엔드 + FSRS 스케줄러.
-4. **[P1] 이해해야 할 개념 목록** — 그 자체는 학습 산출물 아님. 복습 큐의 키 단위이자 §1-3의 입력.
-5. **[P1] 변경 요약** — 단독 노출은 "읽기"에 가까워 효과 약함. **Socratic prompt와 결합 필수** ("왜 이렇게 했나?", "이 줄이 없으면 무엇이 깨지는가?").
-6. **[P2] 개념 간 연결 맵** — 단독 시각화는 효과 미약. 노드 클릭 → self-explanation + spaced 큐 연결 시에만 의미.
+이 리서치는 그 간극을 줄이기 위해, AI 도움을 받은 내 실제 코드 변경을 사후에 다시 회수하고 재구성하게 만드는 제품 가능성을 검토한다.
 
-## 정리
+## 현재 수렴한 방향
 
-개인적 용도, "코딩 교육 플랫폼"이 아니라 **"AI가 대신 만든 내 실제 작업을 다시 내 실력으로 돌려주는 로컬 도구"**로 좁힌다.
+Code Replay는 명시적으로 전달받은 `agent-assisted` 변경 `target`을 `replay task`와 `review card`로 변환하는 `local-first` 학습 도구로 수렴했다.
 
-학술 framing으로는 **"AI 시대의 skill-preserving deployment 도구"**. 사용자는 AI로 PR을 만들고, code-replay가 그 PR을 사후에 본인 머리로 한 번 더 통과시키는 spaced 학습 큐로 변환한다.
+중요한 경계는 다음과 같다.
+
+- Code Replay는 AI가 관여한 변경을 자동으로 찾지 않는다.
+- `agent-assisted`는 사용자나 외부 연동이 전달한 provenance 속성이다.
+- Code Replay의 역할은 전달받은 target을 로컬 diff와 대조해 검증하고 학습 산출물로 변환하는 것이다.
+- 기본 산출물은 각 프로젝트 repo의 `.codereplay/` 아래에 둔다.
+- `.codereplay/`의 git tracking 여부는 사용자가 결정하며, P0의 기본 가이드는 local untracked 사용이다.
+
+## 초기 MVP 후보와 현재 해석
+
+초기 리서치에서 검토한 MVP 후보는 다음처럼 현재 방향에 흡수됐다.
+
+1. "처음부터 다시 구현하기"는 초기 `replay task`로 남긴다.
+2. 빈칸 채우기는 P0 `review card` 타입인 `fill_blank`로 남긴다.
+3. 다음 복습 질문은 spaced review 큐에 들어가는 verified card로 남긴다.
+4. 이해해야 할 개념 목록은 P0에서 단순 `concept` label/id로 축소한다.
+5. 변경 요약은 단독 산출물이 아니라 replay/card 생성을 돕는 보조 맥락으로 둔다.
+6. 개념 간 연결 맵은 P0에서 제외하고 장기 설계로 미룬다.
+
+현재 P0의 자세한 범위는 `docs/mvp-spec.md`를 따른다.
 
 ## 차별점
 
-기존 인접 도구(Copilot 학습 가이드 / Cursor Learn / CodeTeach / Exercism / CodeCrafters / Anki)와 비교했을 때 code-replay의 새 조합은 다음과 같다(`docs/alternative.md` "비어 있는 틈" 참조):
+Code Replay의 차별점은 새로운 단일 기술이 아니라 검증된 빌딩 블록을 개인 repo의 agent-assisted 변경 맥락에 묶는 조합에 있다.
 
-- 입력 = **개인 git repo의 내 PR/diff** (남이 만든 exercise나 유명 시스템 X)
-- 가중치 = **"AI가 짠 부분 vs 내가 짠 부분"** 구분 (다른 도구 없음)
-- 변환 = **재구현 + 빈칸 + spaced 복습 큐로 묶음**
-- 처방 = **AI 사용 후 사후 reconstruction 강제** (Augmentation Trap 처방의 product화)
-- 저장 = **로컬 git-tracked, 본인 repo 안 `.codereplay/` 디렉터리**
+- 입력은 개인 git repo의 명시적 target이다.
+- provenance는 Code Replay가 추론하지 않고 사용자나 외부 연동이 제공한다.
+- 변환 결과는 replay task와 spaced review card다.
+- 저장은 repo-local `.codereplay/`를 기본으로 한다.
+- 목표는 AI 사용 후 내 코드 변경을 다시 내 구현 감각으로 회수하는 것이다.
 
-신기술 발명이 아니라 **검증된 빌딩 블록의 새 조합**이라 실행 위험은 낮다(`docs/diff-to-curriculum.md` §9 gap analysis).
+## 문서 지도
 
-## 근거 문서
+### 방향과 스펙
 
-- `docs/learning-science.md` — generation effect / retrieval practice / spaced repetition / Parsons / 코드 읽기 vs 쓰기 실증 근거. MVP 6개 산출물의 P0/P1/P2 배치 정당화.
-- `docs/ai-learning-impact.md` — METR 2025-2026 시리즈, AI 사용 시 quiz -17%, Augmentation Trap, vibe coding 연구. 시장 정당화와 narrative 카드.
-- `docs/diff-to-curriculum.md` — diff → 학습 자료 변환의 기술 빌딩 블록(AST, KG, OSS), prior art, gap analysis, MVP 기술 스택 후보.
-- `docs/ast-diff-tools.md` — 구조 diff 백엔드와 AI vs human 작성 구분의 입력 신호.
-- `docs/local-vs-api-llm.md` — private PR/diff 입력을 고려한 로컬 LLM default와 cloud opt-in 경계.
-- `docs/learning-metrics.md` — card retention, concept mastery, reconstruction, transfer 4계층 metric.
-- `docs/quantization-impact.md` — 로컬 LLM 양자화가 카드 생성, judge, structured output에 주는 영향.
+- `docs/product-direction.md` — 현재 제품 방향, 핵심 원칙, non-goals.
+- `docs/mvp-spec.md` — P0 입력 계약, 캐시 계약, 산출물, CLI 흐름, 수용 기준.
+- `docs/topic.md` — 초기 주제, 리서치 맥락, 문서 지도.
+
+### 핵심 근거
+
+- `docs/learning-science.md` — generation effect, retrieval practice, spaced repetition, Parsons, 코드 읽기와 쓰기 실증 근거.
+- `docs/ai-learning-impact.md` — AI 사용과 학습 간극, cognitive offloading, structured unassisted practice 근거.
+- `docs/alternative.md` — 인접 도구와 비어 있는 제품 조합.
+
+### P0 설계 근거
+
+- `docs/agent-integration.md` — provenance 수집, replay mode 권한 경계, agent 연동 전략.
 - `docs/llm-quiz-hallucination.md` — LLM 생성 카드의 hallucination 방지와 검증 파이프라인.
-- `docs/concept-identity.md` — PR 간 같은 개념을 같은 노드로 묶는 entity resolution / active learning 설계.
-- `docs/agent-integration.md` — Codex / Claude Code provenance 수집, replay mode 권한 경계, skill/plugin 통합 전략.
-- `docs/alternative.md` — 시장 대안과 빈 자리.
+- `docs/diff-to-curriculum.md` — diff를 학습 단위로 변환하는 기술 빌딩 블록과 gap analysis.
+- `docs/ast-diff-tools.md` — 구조 diff, line range, hunk 처리 구현 근거.
+- `docs/learning-metrics.md` — card retention, concept mastery, reconstruction, transfer metric 계층.
+
+### 후속 또는 구현 참고
+
+- `docs/concept-identity.md` — PR 간 같은 개념을 묶는 entity resolution과 active learning 설계.
+- `docs/local-vs-api-llm.md` — local-first 모델 운영과 cloud opt-in 경계.
+- `docs/quantization-impact.md` — 로컬 LLM 양자화가 카드 생성, judge, structured output에 주는 영향.
 
 ## 참고
 
