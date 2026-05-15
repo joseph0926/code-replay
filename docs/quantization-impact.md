@@ -1,13 +1,13 @@
-# 로컬 LLM 양자화 품질 영향: code-replay의 컴포넌트별 정밀도 결정
+# 로컬 LLM 양자화 품질 영향: 로컬 백엔드 운영 참고
 
 리서치 일자: 2026-05-15
-스코프: `docs/local-vs-api-llm.md` §6 미해결 — "양자화 품질 손실에서 fill-in-the-blank 정답 판정 정확도 손실 측정 필요"의 자체 측정 전 근거 정리. code-replay의 어떤 단계에 어떤 quantization을 default로 두고, 어떤 단계에 정밀도를 올릴지 결정한다.
+스코프: 로컬 LLM 사용 시 양자화 단계가 review card 생성과 채점 품질에 미치는 영향 정리. 양자화 tuning 자체는 P0 표준 작업이 아니다. P0 default는 합리적인 단일 quantization을 한 가지 골라 두고 그대로 사용하는 것이며, 본 문서의 단계별 권장은 P1+ 로컬 백엔드 최적화나 사용자 환경별 가이드로 사용한다.
 
 ## 한 줄 결론
 
-- **개념 추출 / 빈칸·quiz 생성: Q5_K_M (GGUF) default**, 16GB Mac 기준 speed/accuracy 균형 최적. Q4_K_M은 6-8GB 한계 환경에서만 fallback.
-- **LLM-as-judge / 재구현 채점: Q8_0 또는 cloud API**. judge는 hallucination 영향이 카드 품질에 직접 전이되므로 정밀도 양보 안 함.
-- **structured output (카드 JSON): 양자화 단계 ≤ 4bit는 회피.** 4bit는 pre-emptive decoding mechanism이 깨지는 사례 있음 (Cleanlab 보고). MVP에서는 schema 강제(grammar-constrained generation)로 보강.
+- **P0 default**: 학습 포인트 추출과 review card 생성에 **GGUF Q5_K_M** 하나만 잡아 둔다. 양자화 tuning 자체는 P0 표준 흐름이 아니며, P1+ 로컬 백엔드 최적화에서 다시 본다.
+- **LLM-as-judge / reconstruction 채점**: P0 비-목표(`docs/learning-metrics.md` §4). 도입할 때는 **Q8_0 또는 cloud API**. judge는 hallucination 영향이 카드 품질에 직접 전이되므로 정밀도 양보 안 함.
+- **structured output (카드 JSON): 양자화 단계 ≤ 4bit는 회피.** 4bit는 pre-emptive decoding mechanism이 깨지는 사례 있음 (Cleanlab 보고). schema 강제(grammar-constrained generation)로 보강한다.
 - **format 선택**: Apple Silicon은 **GGUF Q5_K_M** (ollama default). CUDA GPU 보유자는 **Marlin-AWQ**가 속도(741 tok/s) + 품질(95%) 동시 우위.
 - **Qwen2.5-Coder 가족이 양자화 tolerance 가장 높다는 게 학계 컨센서스** → 로컬 default 모델로 합리적.
 
@@ -51,7 +51,7 @@
 
 ## 4. Structured output (JSON) 특이사항
 
-code-replay는 카드 출력을 **JSON schema** (질문 / 정답 / distractor / 정답 위치)로 강제하므로 이 측면이 중요.
+code-replay는 review card 산출을 일정한 구조(질문, 정답, rubric, target/replay 연결, verified flag 등)로 만들어야 하므로 structured output 안정성이 중요하다.
 
 - **smaller model (8B 이하)이 양자화에 더 민감** — 작은 모델 + 4bit + structured output은 위험 조합.
 - Cleanlab 분석: **양자화된 모델에서 pre-emptive decoding이 작동 안 함** → structured output 신뢰도 떨어짐. FP16에서만 안정적.
@@ -69,24 +69,29 @@ code-replay는 카드 출력을 **JSON schema** (질문 / 정답 / distractor / 
 
 ## 6. code-replay 컴포넌트별 권장 quantization
 
-| 컴포넌트 | 추천 quantization | 이유 |
-|---|---|---|
-| 변경 요약 / 자연어 설명 생성 | Q5_K_M (GGUF) 또는 Marlin-AWQ | 자연어 토큰 fidelity 중요도 중간. 4bit에서 충분, 5bit 마진 |
-| 개념 추출 (AST + LLM) | Q5_K_M default | structured 기반이라 schema 강제 + grammar 사용 |
-| 빈칸 / quiz 카드 생성 | **Q5_K_M minimum, Q8 권장** | structured output + 정답 정확도 결정적, 카드는 사용자에게 직접 노출 |
-| 재구현 채점 LLM-as-judge | **Q8_0 또는 cloud API** | judge hallucination이 채점 품질로 직결 — 정밀도 양보 X |
-| 개념 노드 동일성 embedding | (별도) embedding model 자체 양자화는 영향 적음 | 다음 docs/concept-identity.md 참조 |
-| privacy 민감 hunk 처리 | 무조건 로컬, Q5_K_M+ | API 격리 필수 (`local-vs-api-llm.md` §5.2) |
+| 컴포넌트 | 추천 quantization | 이유 | P0/P1/P2 |
+|---|---|---|---|
+| 학습 포인트 추출 (AST + LLM) | Q5_K_M default | structured 기반이라 schema 강제 + grammar 사용 | P0 |
+| `fill_blank` / `explain_decision` review card 생성 | **Q5_K_M minimum, Q8 권장** | structured output + 정답 정확도 결정적, 카드는 사용자에게 직접 노출 | P0 |
+| 변경 요약 / 자연어 설명 (보조 맥락) | Q5_K_M (GGUF) 또는 Marlin-AWQ | 자연어 토큰 fidelity 중요도 중간. 4bit에서 충분, 5bit 마진 | P0 |
+| reconstruction 채점 LLM-as-judge | **Q8_0 또는 cloud API** | judge hallucination이 채점 품질로 직결 — 정밀도 양보 X | P1 |
+| concept 동일성 embedding | (별도) embedding model 자체 양자화는 영향 적음 | `docs/concept-identity.md` 참조 | P1+ |
+| privacy 민감 영역 처리 | 무조건 로컬, Q5_K_M+ | cloud 격리 필수 (`local-vs-api-llm.md` §5.2) | P0 |
 
-### 6.1 디플로이먼트 default
+### 6.1 디플로이먼트 default (참고용)
 
-```
-.codereplay/config.toml (예시)
-model_backend = "ollama"
-generation_model = "qwen2.5-coder:32b-instruct-q5_K_M"
-judge_model = "qwen2.5-coder:32b-instruct-q8_0"  # 또는 anthropic/claude-sonnet-4
-embedding_model = "nomic-embed-text"  # docs/concept-identity.md에서 결정
-structured_output_grammar = true  # llama.cpp GBNF 강제
+`docs/mvp-spec.md`의 표준 구성은 `.codereplay/config.json`이며, 아래 예시는 로컬 백엔드 운영을 가정한 참고 형태다. P0에서는 generation_model 하나만 고정해 두는 것이 최소 구성이며, judge/embedding 항목은 P1+ 도입 시 추가한다.
+
+```jsonc
+// .codereplay/config.json (참고 예시)
+{
+  "model_backend": "ollama",
+  "generation_model": "qwen2.5-coder:32b-instruct-q5_K_M",
+  // 아래는 P1+ 단계에서 도입 후보
+  // "judge_model": "qwen2.5-coder:32b-instruct-q8_0",
+  // "embedding_model": "nomic-embed-text",
+  "structured_output_grammar": true
+}
 ```
 
 ### 6.2 메모리 부족 시 단계적 강등
@@ -100,7 +105,7 @@ structured_output_grammar = true  # llama.cpp GBNF 강제
 
 ## 7. 위험 / 미해결
 
-- **MVP 자체 eval 필수**: 위 수치들은 일반 벤치(HumanEval, MMLU). **fill-in-blank 정답 정확도, distractor 적절성, judge 일관성**은 code-replay 자체 eval set으로 측정해야 함. → MVP가 dogfooding하면서 자체 fixture 누적.
+- **자체 eval은 후속 단계**: 위 수치들은 일반 벤치(HumanEval, MMLU). **fill_blank 정답 정확도, distractor 적절성, judge 일관성**은 code-replay 자체 eval set으로 측정해야 한다. P0에서는 default quantization 한 가지만 고정하고, 자체 eval/fixture 누적은 P1+ 로컬 백엔드 최적화 단계에서 다룬다.
 - **다국어/한국어 영향**: 양자화는 비영어 컨텍스트에서 더 큰 손실 사례. 사용자 코드 안의 한글 주석 / 한국어 prompt 영향 별도 측정 필요.
 - **hardware accelerator별 차이**: M-series Neural Engine, NVIDIA Marlin, AMD ROCm에서 같은 양자화도 성능/품질 다름. 첫 실행 자동 벤치 + 권장 모델 제안하는 selector 도구 필요.
 - **양자화 + tool use**: 양자화된 모델은 tool/function calling 정확도가 더 떨어진다는 보고 다수. code-replay가 tool use 패턴 채택하면 별도 검증.

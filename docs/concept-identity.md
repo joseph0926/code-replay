@@ -1,12 +1,18 @@
-# 개념 노드 동일성 판정: transfer 측정의 전제
+# concept identity: 같은 개념을 묶는 entity resolution 설계 (P1/P2)
 
 리서치 일자: 2026-05-15
-스코프: `docs/learning-metrics.md` §8 미해결 — "개념 노드 동일성 판정이 틀리면 transfer 측정 망가짐. embedding similarity + 인간 라벨 hybrid." `docs/diff-to-curriculum.md` §4 KG 빌딩과도 직결. **PR마다 추출되는 개념을 같은 노드로 묶을지, 다른 노드로 둘지** 어떻게 자동/반자동 판정할지 결정한다.
+스코프: 여러 target에서 등장하는 개념을 같은 `concept`로 묶는 entity resolution 설계. **`docs/product-direction.md`에서 P0의 `concept`은 복잡한 graph가 아니라 단순 label/id**이므로, 이 문서의 자동 판정/embedding/active learning 설계는 P1 이후의 후속 단계로 둔다.
+
+## 현재 결정 기준
+
+- P0의 `concept`은 단순 label/id다. 안정된 이름을 부여하는 것까지만 P0 책임.
+- 자동 entity resolution(embedding, threshold, active learning, alias graph)은 P1+ 후속 설계. transfer 자동 감지(P2)의 전제이기 때문에 transfer가 활성화되기 전까지는 부분 구현으로도 가능.
+- full code knowledge graph는 P0의 비-목표(`docs/product-direction.md` non-goals). 아래 설계는 그 위에서 보존한다.
 
 ## 한 줄 결론
 
-- **3-tier threshold 자동 판정**: cosine **≥ 0.92 auto-merge** / **0.75-0.92 사용자 확인 (active learning)** / **< 0.75 새 노드**. Neo4j Agent Memory가 검증한 컨벤션 그대로 차용.
-- **Embedding은 hybrid**: 개념 이름(자연어) + 대표 코드 스니펫 둘 다 embed → 가중 합산. **code-replay 1차는 Jina Embeddings v2 또는 nomic-embed-text** (Ollama 호환).
+- **3-tier threshold 자동 판정**: cosine **≥ 0.92 auto-merge** / **0.75-0.92 사용자 확인 (active learning)** / **< 0.75 새 label**. Neo4j Agent Memory가 검증한 컨벤션 그대로 차용. **P1 이후 도입.**
+- **Embedding은 hybrid**: 개념 이름(자연어) + 대표 코드 스니펫 둘 다 embed → 가중 합산. **1차 후보는 Jina Embeddings v2 또는 nomic-embed-text** (Ollama 호환).
 - **Borderline (0.75-0.92)에서 LLM judge 호출은 선택지지만 default 안 함**. `docs/llm-quiz-hallucination.md` §6 bias 12종이 작은 샘플에서 결정적. **사용자 확인이 더 신뢰**.
 - **Active learning 루프**: 사용자 merge/split 결정이 label data가 돼 사용자별 threshold 미세 조정. 학계 entity resolution 표준 패턴 (Saha et al. ACM CIKM 2019).
 - **temporal drift 처리**: 같은 개념이 라이브러리 버전 업그레이드로 다르게 표현될 수 있음 (예: React `useMemo` vs `use(memo(...))` cache primitive). **alias 그래프**로 별칭 묶음.
@@ -15,18 +21,18 @@
 
 ### 1.1 왜 어려운가
 
-같은 PR 패턴이 PR마다 다르게 표현됨:
-- PR-1에서 추출: `"useMemo로 비싼 계산 캐싱"`
-- PR-3에서 추출: `"React useMemo 의존성 배열 활용"`
-- PR-7에서 추출: `"렌더 비용 줄이는 memoization 패턴"`
+같은 패턴이 target마다 다르게 표현됨:
+- target-1에서 추출: `"useMemo로 비싼 계산 캐싱"`
+- target-3에서 추출: `"React useMemo 의존성 배열 활용"`
+- target-7에서 추출: `"렌더 비용 줄이는 memoization 패턴"`
 
 이 셋이 같은 개념인지 다른 개념인지 결정해야 한다. 아니면:
-- **너무 합치면**: 다른 개념이 한 노드로 뭉쳐 mastery 신호가 흐려짐.
-- **너무 쪼개면**: transfer 측정이 0에 수렴 (같은 개념이 다른 PR에서 등장해도 매칭 못 함).
+- **너무 합치면**: 다른 개념이 한 label로 뭉쳐 mastery 신호가 흐려짐.
+- **너무 쪼개면**: transfer 측정이 0에 수렴 (같은 개념이 다른 target에서 등장해도 매칭 못 함).
 
 ### 1.2 transfer 측정의 전제
 
-`docs/learning-metrics.md` §5 transfer 계층은 "같은 개념이 새 PR에서 다시 등장했을 때 사용자가 자력 처리했는가"를 측정한다. **노드 동일성 판정이 틀리면 transfer 신호 자체가 무의미해진다.** 따라서 이 문서가 metric layer의 ground truth.
+`docs/learning-metrics.md` §5 transfer 계층(P2)은 "같은 개념이 새 target에서 다시 등장했을 때 사용자가 자력 처리했는가"를 측정한다. **label 동일성 판정이 틀리면 transfer 신호 자체가 무의미해진다.** transfer 자체가 P2 후속 단계이므로 이 문서의 자동 entity resolution도 동일한 시점에 활성화한다.
 
 ### 1.3 학계 용어
 
@@ -34,17 +40,17 @@
 - KG 도메인: **ontology matching / entity matching**
 - code-replay 특화: **concept identity / concept node merging**
 
-## 2. Pipeline 개요 (5단)
+## 2. Pipeline 개요 (5단, P1+)
 
 ```
-1. Extract  : PR diff + AST → 개념 카드 (이름 + 대표 코드 + 설명)
+1. Extract  : target + AST → 개념 후보 (이름 + 대표 코드 + 설명)
 2. Embed    : (이름 NL embed) + (코드 embed) hybrid 벡터
-3. Block    : k-NN search로 기존 노드 top-k 후보 추출 (n² 회피)
+3. Block    : k-NN search로 기존 label top-k 후보 추출 (n² 회피)
 4. Match    : threshold 기반 분류
               ≥ 0.92  → auto-merge
               0.75-0.92 → user-flag (active learning)
-              < 0.75  → new node
-5. Merge    : 같은 노드로 판정되면 alias 추가, 카드 누적, 통계 업데이트
+              < 0.75  → new label
+5. Merge    : 같은 label로 판정되면 alias 추가, card 누적, 통계 업데이트
 ```
 
 ## 3. Embedding 모델 선택
@@ -63,7 +69,7 @@
 
 ### 3.2 권장
 
-- **MVP 1차**: `nomic-embed-text` (Ollama 호환, 로컬 stack 일관). 자연어 개념 이름 비교에 충분.
+- **활성화 1차 (P1+)**: `nomic-embed-text` (Ollama 호환, 로컬 stack 일관). 자연어 label 이름 비교에 충분.
 - **2차 (정확도 필요 시)**: 자연어 부분은 nomic, **코드 스니펫 부분은 CodeBERT/GraphCodeBERT** 별도 embed. 두 벡터 결합.
 
 ### 3.3 Hybrid embedding 전략
@@ -130,18 +136,18 @@ LLM ontology matching에서 표준화된 패턴:
 ### 6.2 active learning 루프
 
 ```
-1. 새 PR 처리 → 신규 개념 K개 추출
-2. 각 개념을 기존 노드와 매칭 (§4 threshold)
+1. 새 target 처리 → 신규 개념 K개 추출
+2. 각 개념을 기존 label과 매칭 (§4 threshold)
 3. flag (0.75-0.92) 큐에 쌓임 → 사용자에게 batch UI:
    "이 개념과 같은가요?"
-   [기존 노드 A | 기존 노드 B | 기존 노드 C | 새 노드]
-4. 사용자 결정 → 노드 merge 또는 split → 결정을 label로 저장
-5. 누적된 label로 사용자별 threshold + α/β 가중치 미세 조정
+   [기존 label A | 기존 label B | 기존 label C | 새 label]
+4. 사용자 결정 → label merge 또는 split → 결정을 학습 데이터로 저장
+5. 누적된 결정으로 사용자별 threshold + α/β 가중치 미세 조정
 ```
 
 ### 6.3 UX 원칙
 
-- **batch 처리**: 매 PR마다 묻지 않고, N개 쌓이면 한 번에. 작업 흐름 방해 최소.
+- **batch 처리**: 매 target마다 묻지 않고, N개 쌓이면 한 번에. 작업 흐름 방해 최소.
 - **explanation**: 왜 이 후보들이 떴는지 (cosine 점수, 공통 키워드) 표시. modern entity resolution 요구사항 (explainability).
 - **취소 가능**: 잘못 merge한 결정 되돌릴 수 있어야 함.
 - **bypass**: "전부 새 노드로" 옵션도 항상 노출 (uncertain일 때 안전 default).
@@ -164,16 +170,16 @@ LLM ontology matching에서 표준화된 패턴:
 - **버전 메타데이터**: 각 카드에 origin PR commit hash + 라이브러리 버전 정보. 마이그레이션 추적 가능.
 - **deprecation 플래그**: alias가 더 이상 안 쓰이면 비활성화. 새 표현으로 마스터 alias 변경.
 
-### 7.3 PR vs PR 비교
+### 7.3 target 간 비교
 
-같은 사용자가 같은 코드베이스 다른 PR에서 같은 개념 등장 → 거의 항상 alias 일치. drift는 주로 **시간 / 라이브러리 버전 / 새 패러다임 도입** 때 발생.
+같은 사용자가 같은 코드베이스 다른 target에서 같은 개념 등장 → 거의 항상 alias 일치. drift는 주로 **시간 / 라이브러리 버전 / 새 패러다임 도입** 때 발생.
 
 ## 8. code-replay 적용 (구체)
 
 ### 8.1 데이터 구조
 
 ```
-.codereplay/concepts/<concept-id>.md (frontmatter + body)
+.codereplay/concepts/<concept-id>.md (frontmatter + body, P1+ 저장 형태 후보)
 
 ---
 id: cpt_useMemo_caching
@@ -186,7 +192,7 @@ created: 2026-05-15
 updated: 2026-05-20
 mastery: 0.78
 card_ids: [card_001, card_005, card_022]
-source_prs: [PR#42, PR#78, PR#103]
+source_targets: [target-001, target-014, target-031]
 library_version: react@19.2.0
 deprecated_aliases: []
 ---
@@ -237,22 +243,22 @@ def resolve_concept(new_concept, db):
 
 ## 9. 위험 / 미해결
 
-- **Embedding 모델 도메인 적합성**: nomic-embed-text는 범용. 한국어 주석/이름 + 코드 hybrid에서 정확도 미측정. → MVP에서 자체 측정.
-- **Cold start**: 첫 PR 10-20개는 비교 대상이 부족해 거의 모든 개념이 새 노드. flag queue 의미 약함. → 명시적 "데이터 수집 중" 상태 표시.
+- **Embedding 모델 도메인 적합성**: nomic-embed-text는 범용. 한국어 주석/이름 + 코드 hybrid에서 정확도 미측정. → 활성화 시점에 자체 측정.
+- **Cold start**: 첫 target 10-20개는 비교 대상이 부족해 거의 모든 개념이 새 label. flag queue 의미 약함. → 명시적 "데이터 수집 중" 상태 표시.
 - **Threshold default 의존성**: 0.92/0.75는 Neo4j 컨벤션이지만 도메인마다 최적값 다름. 사용자별 보정 데이터 30개 미만에서는 default 신뢰 낮을 수 있음.
-- **alias 폭발**: 한 노드에 alias가 너무 많아지면 노드 의미가 흐려짐. **상한 (e.g., 10 aliases) + 분할 제안**.
-- **LLM judge 사용 시 비용**: borderline마다 호출하면 PR 처리 시간 증가. batch + 사용자 직접 결정이 더 빠를 수 있음.
+- **alias 폭발**: 한 label에 alias가 너무 많아지면 의미가 흐려짐. **상한 (e.g., 10 aliases) + 분할 제안**.
+- **LLM judge 사용 시 비용**: borderline마다 호출하면 target 처리 시간 증가. batch + 사용자 직접 결정이 더 빠를 수 있음.
 - **개인 데이터로 학습한 threshold/가중치 export 가능성**: 사용자가 자기 데이터를 다른 도구로 옮길 때 portability 보장 (`docs/local-vs-api-llm.md` §5.4 로컬 우선 원칙).
-- **multi-language 코드베이스**: 한 사용자가 TS/Python/Go 섞어 작업하면 embedding 도메인이 복잡해짐. 언어별 별도 sub-graph 가능성 검토.
-- **추후 자동 split 결정 추가 여부**: alias 누적 후 의미 분기가 명확해지면 자동 split 제안. MVP scope 밖.
+- **multi-language 코드베이스**: 한 사용자가 TS/Python/Go 섞어 작업하면 embedding 도메인이 복잡해짐. 언어별 별도 sub-index 가능성 검토.
+- **추후 자동 split 결정 추가 여부**: alias 누적 후 의미 분기가 명확해지면 자동 split 제안. P0 scope 밖.
 
-## 10. MVP 단계별 적용
+## 10. 단계별 적용
 
 | 시점 | 만든다 | 만들지 않는다 |
 |---|---|---|
-| MVP P0 | nomic-embed-text 단독 + 3-tier threshold + active learning batch UI | hybrid embedding, LLM judge, alias graph |
-| MVP P1 | hybrid embedding (NL+code), alias graph, 사용자별 threshold 자동 조정 | retrieve-then-prompt LLM judge |
-| MVP P2 | retrieve-then-prompt LLM judge (선택), automatic split 제안 | DPO ranker, federated 학습 |
+| P0 | 단순 `concept` label/id만 (안정된 이름 부여까지) | 자동 entity resolution, embedding, active learning, alias graph |
+| P1 | nomic-embed-text 기반 3-tier threshold + active learning batch UI, hybrid embedding(NL+code), alias graph 초기 | retrieve-then-prompt LLM judge |
+| P2 | retrieve-then-prompt LLM judge (선택), 사용자별 threshold 자동 조정, automatic split 제안, transfer 자동 감지와 연동 | DPO ranker, federated 학습 |
 
 ## Sources
 

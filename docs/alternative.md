@@ -47,12 +47,12 @@
 
 | 차원 | 기존 도구의 한계 | code-replay의 채움 |
 |---|---|---|
-| 입력 | 코드 스니펫(CodeTeach), 유명 시스템(CodeCrafters), 미리 만든 exercise(Exercism) | **개인 git repo의 내 PR/diff** |
-| 가중치 | 모든 코드를 동등하게 다룸 | **"AI가 짠 부분 vs 내가 짠 부분"** 구분 |
-| 추출 | 인간 수기(Anki) 또는 단일 단위(AIED 2022는 함수 단위) | **AST + LLM hybrid + diff 컨텍스트** |
-| 변환 | 각각 따로 존재 | **재구현 + 빈칸 + spaced 복습 큐로 묶음** |
-| 처방 | Augmentation Trap이 처방으로 제시만 함 | **AI 사용 후 사후 reconstruction 강제 product화** |
-| 저장 | 별도 앱(Anki) 또는 cloud(CodeTeach) | **로컬 git-tracked `.codereplay/`** |
-| UX | PR 리뷰(BugBot)는 버그 탐지가 목적 | **"PR 학습 빈자리" 패널** |
+| 입력 | 코드 스니펫(CodeTeach), 유명 시스템(CodeCrafters), 미리 만든 exercise(Exercism) | **개인 git repo에서 사용자가 명시적으로 전달한 target** |
+| 가중치 | 모든 코드를 동등하게 다룸 | **사용자나 외부 연동이 표시한 agent-assisted target에 집중** (도구가 추론하지 않음) |
+| 추출 | 인간 수기(Anki) 또는 단일 단위(AIED 2022는 함수 단위) | **전달받은 target에서 AST + LLM hybrid로 학습 단위 구성** |
+| 변환 | 각각 따로 존재 | **replay task + verified review card + spaced 복습 큐로 묶음** |
+| 처방 | Augmentation Trap이 처방으로 제시만 함 | **AI 사용 후 사후 unassisted replay를 product화** |
+| 저장 | 별도 앱(Anki) 또는 cloud(CodeTeach) | **repo-local `.codereplay/`** (P0 기본 가이드: local untracked, git tracking 여부는 사용자가 결정) |
+| UX | PR 리뷰(BugBot)는 버그 탐지가 목적 | **명시적으로 전달된 변경의 학습 빈자리** 패널 |
 
 핵심: code-replay는 **"신기술"이 아니라 "검증된 빌딩 블록의 새 조합"**이다. 실행 위험은 낮고 narrative는 학술 백킹이 강하다.

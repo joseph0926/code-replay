@@ -1,15 +1,15 @@
-# AST diff 도구 비교: code-replay의 변경 단위 추출 백엔드
+# AST diff 도구 비교: target 검증과 학습 단위 추출 백엔드
 
 리서치 일자: 2026-05-15
-스코프: `docs/diff-to-curriculum.md` §11 미해결 중 첫 번째. PR/diff 입력에서 **학습 단위(어떤 함수/블록이 의미적으로 바뀌었는가)**를 추출할 백엔드를 결정한다. text diff(git diff)만으로는 "공백/리포맷/리팩터링"과 "실제 의미 변경"이 구분되지 않아 학습 가중치 계산이 부정확하다.
+스코프: 사용자나 외부 연동이 전달한 `target`을 **로컬 diff와 대조해 검증**하고, target 내부에서 **학습 단위(어떤 함수/블록이 의미적으로 바뀌었는가)**를 추출할 백엔드를 결정한다. text diff(git diff)만으로는 "공백/리포맷/리팩터링"과 "실제 의미 변경"이 구분되지 않아 학습 포인트 추출이 부정확하다.
 
 ## 한 줄 결론
 
 - **계층적 선택**: tree-sitter(파서) → difftastic(CLI 표시) → diffsitter(라이브러리 활용) 또는 **GumTree**(엄밀한 edit script가 필요할 때).
 - **MVP 1차 추천: tree-sitter + difftastic CLI**. 30+ 언어 지원, OSS 성숙, 의존성 단순. **edit script가 필요한 시점에 GumTree로 격상**.
 - **상용 SemanticDiff는 정확도 우위지만 라이선스/통합 비용**. MVP 단계에서는 후순위.
-- **ast-grep은 diff 도구가 아님** — pattern search/rewrite. code-replay에서는 **"이런 패턴이 들어왔는가"** 판정에 보조로 쓸 수 있음(예: "이 PR에서 `useMemo` 새로 추가됨" 감지).
-- **per-hunk authorship(AI vs human)**은 어떤 AST diff도 직접 해결하지 않음 → **`git blame` + 시간 휴리스틱 + agent log(Cursor/Claude history)** 별도 레이어 필요.
+- **ast-grep은 diff 도구가 아님** — pattern search/rewrite. code-replay에서는 **"이런 패턴이 들어왔는가"** 판정에 보조로 쓸 수 있음(예: "이 target에서 `useMemo` 새로 추가됨" 감지).
+- **agent-assisted 여부는 AST diff가 판정하지 않는다.** Code Replay는 그 속성을 추론·탐지하지 않으며, 사용자나 외부 연동이 `target_added` event의 `provenance`로 명시적으로 전달한다(§5).
 
 ## 1. 도구 카테고리
 
@@ -60,11 +60,12 @@
 
 | 요구사항 | 필요 도구 |
 |---|---|
+| target이 가리키는 file/line range가 실제 diff와 맞는지 검증 | tree-sitter (AST) → difftastic 또는 diffsitter (구조 diff) |
 | 변경된 함수/블록 단위 식별 | tree-sitter (AST) → difftastic 또는 diffsitter (구조 diff) |
-| **edit operation 분류** (insert/remove/update/move) → "내가 처음 만든 함수 vs 옮긴 코드" | **GumTree** (이게 핵심 차별 — text diff와 difftastic은 move를 잘 못 구분) |
+| **edit operation 분류** (insert/remove/update/move) → 학습 포인트 우선순위화 | **GumTree** (이게 핵심 차별 — text diff와 difftastic은 move를 잘 못 구분) |
 | 공백/리포맷 변경 무시 | difftastic, GumTree 모두 OK (tree-based) |
 | 새 패턴 도입 감지 ("처음으로 useMemo 들어옴") | ast-grep 보조 |
-| AI vs human 작성 구분 | **AST diff 외부**: git blame + 커밋 시간 휴리스틱 + Cursor/Claude session log (별도 레이어, §5에서 상술) |
+| target의 agent-assisted 여부 판정 | **AST diff가 하지 않는다.** 사용자나 외부 연동이 명시적 provenance로 입력(§5) |
 | 학습 단위 추출 | tree-sitter 노드 → AST-T5 / AIED 2022 패턴(`docs/diff-to-curriculum.md` §3, §5) |
 
 ## 4. 추천 스택 (MVP 단계)
@@ -81,18 +82,18 @@
 - SemanticDiff — 라이선스 / 통합 비용 / API surface 폐쇄도 검토 필요. MVP 후 재평가.
 - diffsitter — difftastic이 라이브러리 통합에 한계 보일 때만 격상.
 
-## 5. AI vs Human 작성 구분 — AST diff 외부 레이어
+## 5. agent-assisted 판정 — AST diff 외부 입력
 
-AST diff 도구는 **누가 썼는지** 모른다. 이건 code-replay의 핵심 가중치라 별도 처리 필요.
+AST diff 도구는 **누가 썼는지** 모른다. Code Replay 역시 이 속성을 추론·탐지하지 않는다. `agent-assisted`는 `target_added` event의 `provenance` 입력으로 받는 속성이다(`docs/product-direction.md`, `docs/mvp-spec.md`).
 
-후보 신호:
-- **`git blame`** — 직접 신호. 단 commit이 단일 author일 때만 작동.
-- **커밋 메시지 휴리스틱** — `Co-Authored-By: Claude/Cursor/Copilot` trailer (Claude Code 기본 패턴), `[skip ci]`/`AI-generated` 같은 플래그.
-- **commit 시간 분포** — 단시간 대량 변경은 AI 의심 신호 (휴리스틱 약함).
-- **에디터 활동 로그** — Cursor `~/.cursor/`, Claude Code transcript, Copilot suggestion accept rate 등. **에디터별로 source가 다 달라서 통합 어려움**.
-- **사용자 명시 태그** — `.codereplay/agent-hunks.json` 같은 자가 신고 파일. 가장 확실하지만 사용자 부담 추가.
+외부 입력으로 들어올 수 있는 보조 신호:
+- **사용자 명시** — CLI `target add` 또는 외부 도구가 `target_added` event에 `provenance.label: "agent-assisted"`로 표시. 가장 확실한 신호.
+- **commit trailer** — `Co-Authored-By:` trailer, `Code-Replay-Agent-Assisted: true` 등. 사용자나 외부 도구가 이 trailer를 읽어 target event로 변환할 때 보조 신호로 쓴다.
+- **에디터/에이전트 활동 로그** — Cursor, Claude Code, Codex 등의 session log. P0에서는 자동 파싱하지 않는다. 외부 도구가 사용자 의사로 변환해 target event를 만들 때만 쓴다.
+- **`git blame`** — 누가 commit했는지 단순 정보. 단일 author 여부 확인 정도.
+- **commit 시간 분포** — 휴리스틱이 약하고 Code Replay에서 직접 사용하지 않는다.
 
-→ **MVP 1차는 `git blame` + commit trailer + 사용자 명시 태그**의 조합으로 시작. 에디터 로그 통합은 후순위.
+→ P0에서는 **사용자가 직접 target을 추가하거나 외부 연동이 target event를 만들어 전달**하는 흐름만 표준이다. 에디터 로그 자동 파싱과 시간 휴리스틱은 비-목표. agent-assisted 여부를 LLM이나 코드 스타일 classifier로 추론하는 것 역시 사용하지 않는다.
 
 ## 6. 위험 / 미해결
 
@@ -100,7 +101,7 @@ AST diff 도구는 **누가 썼는지** 모른다. 이건 code-replay의 핵심 
 - **GumTree 비용**: 큰 모노레포 PR에서 비용 이슈. 2024 ICSE 후속이 cheap heuristic 추가했지만 실측 필요.
 - **tree-sitter 문법 버전**: 같은 언어도 grammar 버전에 따라 결과 다름. 재현성 위해 grammar 버전 pin 필요.
 - **JSX/TSX 같은 hybrid**: tree-sitter 문법 품질이 언어마다 편차 큼. JSX/TSX, Svelte, Astro 등 합성 언어는 별도 검증.
-- **AI vs human 신호의 ground truth 없음**: 본인 자가 신고 외엔 100% 정확한 신호 없음. **MVP에서 user feedback 루프로 보정**.
+- **agent-assisted 입력의 정확도는 외부 책임**: Code Replay는 provenance를 추론하지 않으므로, 외부 도구나 사용자가 잘못 표시하면 잘못된 라벨이 그대로 흐른다. P0는 사용자 명시 표시(`target_added` / `target_superseded`)로 정정하는 흐름만 둔다.
 
 ## Sources
 

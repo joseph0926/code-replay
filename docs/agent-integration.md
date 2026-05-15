@@ -1,32 +1,43 @@
-# Codex / Claude Code 통합: agent provenance와 replay 실행 경계
+# Agent 연동: provenance 입력과 replay 실행 경계
 
 리서치 일자: 2026-05-15
-스코프: `docs/topic.md`의 핵심 차별점인 **"AI가 짠 부분 vs 내가 짠 부분"** 가중치를 실제 Codex / Claude Code 작업 흐름에서 어떻게 수집하고, code-replay의 재구현 모드를 어떻게 안전하게 실행할지 정한다. `docs/ast-diff-tools.md` §5의 "AI vs human 작성 구분"을 구현 가능한 데이터 계약으로 내리는 문서다.
+스코프: 외부 코딩 에이전트 흐름(Codex, Claude Code 등)이 Code Replay에 **agent-assisted `target`을 어떻게 명시적으로 전달**하고, replay 실행 시 원본 solution을 어떻게 분리하는지 정한다. `docs/product-direction.md`의 입력 경계와 `docs/mvp-spec.md` Target 입력 계약을 외부 에이전트 작업 흐름 관점에서 보강한다.
+
+## 현재 결정 기준
+
+이 문서는 초기에 "AI가 짠 부분 vs 내가 짠 부분"을 도구가 식별한다는 프레임으로 시작했다. 현재 product-direction은 다음 경계를 따른다.
+
+- Code Replay는 어떤 변경이 AI agent의 도움을 받았는지 탐지하거나 추론하지 않는다.
+- `agent-assisted`는 사용자나 외부 연동이 명시적으로 전달한 `provenance` 속성이다.
+- 표준 입력은 `.codereplay/input/targets.jsonl` append-only event log이며, 활성 상태는 `.codereplay/cache/active-targets.json` 재생성 가능한 read model이다.
+
+따라서 이 문서의 "신호 우선순위", "agent-hunks.json 스키마" 같은 절은 현재 결정 위에서 **외부 에이전트가 target event를 어떻게 만들어 전달하는가**에 대한 보조 설계 노트로 읽는다.
 
 ## 한 줄 결론
 
-- code-replay의 agent 통합 핵심은 "에이전트를 더 잘 코딩하게 하기"가 아니라 **에이전트가 만든 변경의 provenance를 로컬에 남기고, 사용자가 그 변경을 unassisted replay하게 만드는 것**이다.
-- MVP P0는 transcript 전체 파싱이 아니라 **commit trailer + 사용자 명시 태그 + `.codereplay/agent-hunks.json`** 조합으로 시작한다. transcript/log 직접 파싱은 privacy와 도구별 포맷 변동 때문에 후순위다.
+- agent 연동의 핵심은 "에이전트가 만든 변경을 도구가 알아내는 것"이 아니라 **에이전트(또는 사용자)가 만든 변경을 명시적인 target event로 Code Replay에 전달하고, 사용자가 그 변경을 unassisted replay하게 만드는 것**이다.
+- 표준 입력은 `.codereplay/input/targets.jsonl` 이벤트 로그다. P0에서 외부 에이전트가 남길 수 있는 신호는 commit trailer, 사용자 명시 표시, 외부 도구가 직접 append한 target event 정도다. transcript/log 직접 파싱이나 AI authorship classifier는 비-목표다.
 - Codex 쪽은 `AGENTS.md`를 repo 공통 규칙 source of truth로 두고, 반복 replay 워크플로는 Skill, 공유/설치 단위는 Plugin으로 승격한다. replay 실행은 `workspace-write + on-request` 같은 낮은 위험 permission profile에서 시작한다.
-- Claude Code 쪽은 `CLAUDE.md`가 `@AGENTS.md`를 참조하는 현재 구조를 유지하고, 빠른 실험은 `.claude/skills`, 공유형은 plugin으로 둔다. replay 중 AI solution 노출 차단은 permissions + hook으로 보조하되, 학습 ground truth는 사용자 제출과 로컬 결과 파일이 맡는다.
-- 모든 provenance, 카드 품질 피드백, concept merge label은 **로컬 `.codereplay/`에만 저장**한다. code-replay 자체 서버나 외부 analytics로 보내지 않는다.
+- Claude Code 쪽은 `CLAUDE.md`가 `@AGENTS.md`를 참조하는 현재 구조를 유지하고, 빠른 실험은 `.claude/skills`, 공유형은 plugin으로 둔다. replay 중 원본 solution 노출 차단은 permissions + hook으로 보조하되, 학습 ground truth는 사용자 제출과 로컬 결과 파일이 맡는다.
+- 모든 provenance, 카드 품질 피드백, concept label은 **로컬 `.codereplay/`에만 저장**한다. code-replay 자체 서버나 외부 analytics로 보내지 않는다. `.codereplay/`의 git tracking 여부는 사용자가 결정하며, P0 기본 가이드는 local untracked 사용이다.
 
-## 1. 왜 agent integration이 필요한가
+## 1. 왜 agent 연동이 필요한가
 
-code-replay의 차별점은 단순히 PR diff를 학습 자료로 바꾸는 것이 아니라, **내가 직접 고민하지 않은 변경을 더 높은 우선순위로 replay하는 것**이다.
+code-replay의 차별점은 단순히 PR diff를 학습 자료로 바꾸는 것이 아니라, **사용자가 명시적으로 전달한 agent-assisted 변경을 사후에 unassisted replay하게 만드는 것**이다.
 
 이미 문서화된 핵심 전제:
 
-- `docs/topic.md` — 입력은 개인 repo의 PR/diff이고, 가중치는 "AI가 짠 부분 vs 내가 짠 부분" 구분이다.
-- `docs/ast-diff-tools.md` — AST diff는 누가 썼는지를 알 수 없고, provenance는 별도 레이어가 필요하다.
-- `docs/local-vs-api-llm.md` — PR 전체가 입력이므로 privacy가 모델 성능보다 우선이다.
+- `docs/product-direction.md` — Code Replay는 target을 발견하지 않고, 사용자나 외부 연동이 명시적으로 전달한 target만 받는다.
+- `docs/mvp-spec.md` — 표준 입력은 `.codereplay/input/targets.jsonl` append-only event log다.
+- `docs/ast-diff-tools.md` — AST diff는 누가 썼는지 알 수 없고, provenance는 외부에서 주어진다.
+- `docs/local-vs-api-llm.md` — diff 전체가 입력이 될 수 있으므로 privacy가 모델 성능보다 우선이다.
 - `docs/llm-quiz-hallucination.md` — 생성 카드 품질은 검증과 사용자 피드백 루프 없이는 retention metric을 오염시킨다.
 
-따라서 agent integration은 세 가지 책임을 가진다.
+따라서 agent 연동은 세 가지 책임을 가진다.
 
-1. 어떤 hunk가 agent assistance를 받았는지 기록한다.
+1. agent 또는 사용자가 만든 변경을 **target event**로 Code Replay에 전달하고, provenance를 함께 남긴다.
 2. replay 중 사용자가 원본 solution을 너무 일찍 보지 않도록 실행 경계를 만든다.
-3. 카드/개념/재구현 결과에 대한 사용자 피드백을 다음 생성 품질에 반영한다.
+3. 카드와 재구현 결과에 대한 사용자 피드백을 다음 생성 품질에 반영한다.
 
 ## 2. 항상-온 규칙과 on-demand workflow 분리
 
@@ -57,61 +68,29 @@ Codex 공식 문서는 Skills를 반복 workflow용 authoring format으로, Plug
 
 ### 3.1 신호 우선순위
 
-| 신호 | 신뢰도 | 비용 | MVP 적용 |
+표준 입력은 `.codereplay/input/targets.jsonl`의 `target_added` 이벤트다. 어떤 source가 그 이벤트를 만드는지는 다음 우선순위로 본다.
+
+| Source | 신뢰도 | 비용 | MVP 적용 |
 |---|---:|---:|---|
-| 사용자 명시 태그 | 높음 | 중 | P0 |
-| commit trailer / commit message marker | 중 | 낮음 | P0 |
-| `.codereplay/agent-hunks.json` | 높음 | 중 | P0 |
-| Codex / Claude Code session id pointer | 중 | 중 | P1 |
-| transcript/log 직접 파싱 | 중 | 높음 | P2 |
-| "AI가 쓴 코드 같다" LLM 판정 | 낮음 | 중 | 사용 금지 |
+| 사용자가 CLI로 직접 추가한 target | 높음 | 중 | P0 |
+| 외부 에이전트가 target event를 직접 append (`target import`) | 높음 | 중 | P0 |
+| commit trailer / commit message marker → 사용자가 import 명령으로 변환 | 중 | 낮음 | P0 |
+| Codex / Claude Code session id pointer를 provenance에 첨부 | 중 | 중 | P1 |
+| transcript/log 직접 파싱 → target 변환 | 중 | 높음 | P2 |
+| LLM이 "AI가 쓴 코드 같다"로 추론한 hunk | — | — | 비-목표 |
 
-LLM에게 "이 코드는 AI가 쓴 것 같은가"를 묻는 방식은 사용하지 않는다. `docs/local-vs-api-llm.md` §6과 `docs/ast-diff-tools.md` §5의 결론처럼, 작성 주체 판정은 모델 인상비평이 아니라 blame, trailer, 사용자 태그, session metadata로 처리해야 한다.
+LLM에게 "이 코드는 AI가 쓴 것 같은가"를 묻는 방식이나 코드 스타일 기반 authorship classifier는 사용하지 않는다. `docs/local-vs-api-llm.md` §6과 `docs/ast-diff-tools.md` §5의 결론처럼, agent-assisted 여부는 모델 인상비평이 아니라 사용자 표시, trailer, 외부 도구가 명시적으로 남긴 provenance로만 처리한다.
 
-### 3.2 `.codereplay/agent-hunks.json` 스키마
+### 3.2 Target event provenance 필드
 
-MVP P0의 핵심 파일이다. 사용자가 직접 편집할 수 있어야 하며, 자동 생성된 값은 항상 override 가능해야 한다.
+P0 표준 입력은 `docs/mvp-spec.md`의 `target_added` 스키마다. agent 연동이 만들 때 채워야 할 핵심 필드는 다음과 같다.
 
-```json
-{
-  "version": 1,
-  "repo": "owner/project",
-  "base_ref": "main",
-  "head_ref": "feature/replay",
-  "commit_sha": "abc123",
-  "generated_at": "2026-05-15T09:00:00+09:00",
-  "hunks": [
-    {
-      "id": "hunk_001",
-      "file": "src/example.ts",
-      "old_start": 10,
-      "old_lines": 4,
-      "new_start": 10,
-      "new_lines": 12,
-      "agent_assisted": true,
-      "provider": "codex",
-      "source_signal": ["user_tag", "commit_trailer"],
-      "confidence": 0.9,
-      "session_ref": {
-        "tool": "codex",
-        "session_id": "local-session-id",
-        "transcript_path": null
-      },
-      "user_override": null,
-      "notes": "사용자가 replay 대상으로 표시"
-    }
-  ]
-}
-```
+- `provenance.source`: `user`, `codex`, `claude-code`, `cursor`, `copilot` 등 어떤 주체가 이 target을 만들었는지.
+- `provenance.label`: `agent-assisted` 등 학습 가중치 입력. Code Replay는 이 라벨을 추론하지 않고 입력 그대로 받는다.
+- `note` (선택): 사용자가 왜 이 target을 골랐는지에 대한 메모.
+- `priority` (선택): 같은 실행에서 우선순위 정렬에 사용한다.
 
-필드 규칙:
-
-- `agent_assisted`: 학습 가중치의 직접 입력이다.
-- `provider`: `codex`, `claude-code`, `cursor`, `copilot`, `unknown`, `human` 중 하나로 시작한다.
-- `source_signal`: 왜 그렇게 판정했는지 남긴다. 예: `user_tag`, `commit_trailer`, `session_ref`, `blame_time_heuristic`.
-- `confidence`: 자동 판정 신뢰도다. 사용자 명시 태그는 0.9 이상, 휴리스틱은 0.6 이하로 둔다.
-- `session_ref.transcript_path`: 기본값은 `null`이다. transcript 본문을 자동 저장하지 않는다.
-- `user_override`: 사용자가 `agent_assisted` 판정을 바꾸면 원래 판정 대신 여기를 source of truth로 본다.
+P0 표준 입력은 단일 hunk 단위 JSON이 아니라 `targets.jsonl` event log다. 과거 리서치에서 제안했던 `.codereplay/agent-hunks.json` snapshot 포맷은 P0 표준 입력에서 빠진다. 비슷한 정보가 필요하면 외부 도구가 그 데이터로 `target_added` 이벤트들을 만들어 `targets.jsonl`에 append하고, 활성 상태는 `.codereplay/cache/active-targets.json`에서 본다.
 
 ### 3.3 Commit trailer 권장
 
@@ -123,7 +102,7 @@ Code-Replay-Provider: codex
 Code-Replay-Session: local-session-id
 ```
 
-이 trailer는 표준 Git trailer 형식이므로 CLI에서 읽기 쉽고, 개인 repo 밖으로 push돼도 코드 본문보다 민감도가 낮다. 그래도 private repo에서는 session id가 외부 시스템 식별자로 이어질 수 있으므로 export 시 제거 옵션이 필요하다.
+이 trailer는 표준 Git trailer 형식이라 CLI에서 읽기 쉽고, 개인 repo 밖으로 push돼도 코드 본문보다 민감도가 낮다. trailer는 그 자체로 Code Replay의 입력이 아니라, **사용자나 외부 도구가 `target import` 흐름으로 변환해 `targets.jsonl`에 append할 때 사용하는 보조 신호**다. private repo에서는 session id가 외부 시스템 식별자로 이어질 수 있으므로 export 시 제거 옵션이 필요하다.
 
 ## 4. Replay mode 실행 경계
 
@@ -155,10 +134,10 @@ Codex 공식 문서 기준으로 `workspace-write`는 로컬 작업에 적합한
 
 Codex Skill의 역할은 다음 정도로 제한한다.
 
-- diff/PR 입력을 받아 `.codereplay/agent-hunks.json` 초안을 만든다.
-- P0 카드와 replay 과제를 생성한다.
+- 사용자가 명시적으로 전달한 변경에 대해 `target_added` event 초안을 만들어 `.codereplay/input/targets.jsonl`에 append한다.
+- 유효한 target에서 P0 replay task와 review card 후보를 생성한다.
 - 생성 결과를 `docs/llm-quiz-hallucination.md` 검증 단계에 따라 검증한다.
-- `Fast mode` 결과는 저장하지 않고 drill only로 둔다.
+- `fast mode`는 즉석 연습용으로만 사용한다. 검증 전 결과는 review card로 저장하지 않고 spaced review 일정에도 넣지 않는다.
 
 ### 4.3 Claude Code 실행 경계
 
@@ -217,9 +196,9 @@ agent가 잘하는 일:
 agent에게 맡기면 안 되는 일:
 
 - 사용자가 이해했는지 단독 판정.
-- AI 작성 여부를 코드 스타일만 보고 판정.
-- 검증 약한 fast-mode 카드를 FSRS 큐에 저장.
-- 사용자의 private PR 데이터를 기본 cloud로 전송.
+- agent-assisted 여부를 코드 스타일이나 LLM 인상비평으로 판정.
+- 검증 안 된 fast-mode 결과를 review card로 저장하거나 spaced review 큐에 적재.
+- 사용자의 private diff 데이터를 기본 cloud로 전송.
 
 `docs/llm-quiz-hallucination.md`에 따라 카드 생성은 single-pass가 아니라 generation -> AST verification -> QA round-trip -> overgenerate-and-rank -> user flag 순서로 처리한다.
 
@@ -227,23 +206,26 @@ agent에게 맡기면 안 되는 일:
 
 | 시점 | 만든다 | 만들지 않는다 |
 |---|---|---|
-| MVP P0 | `.codereplay/agent-hunks.json`, commit trailer parser, user override, Codex/Claude Skill 초안, replay mode docs-only profile | transcript parser, cloud sync, automatic AI authorship classifier |
-| MVP P1 | session id pointer, hook/monitor 기반 provenance 보조 수집, plugin package, concept merge batch UI | transcript 전문 저장, 조직 analytics |
-| MVP P2 | provider별 adapter, export/import, local provenance eval, optional app/IDE panel | 중앙 서버 기반 학습 데이터 수집 |
+| MVP P0 | `targets.jsonl` append 흐름, commit trailer를 사용자 import로 변환하는 helper, Codex/Claude Skill 초안, replay mode docs-only profile | transcript parser, cloud sync, AI authorship classifier, snapshot 형태 agent-hunks.json 표준 입력 |
+| MVP P1 | session id pointer를 provenance에 첨부, hook/monitor 기반 target event 보조 수집, plugin package | transcript 전문 저장, 조직 analytics |
+| MVP P2 | provider별 adapter, target log export/import, local provenance eval, optional app/IDE panel | 중앙 서버 기반 학습 데이터 수집 |
 
 ## 8. 완료 조건
 
-agent integration이 구현됐다고 말하려면 최소한 아래가 가능해야 한다.
+agent 연동이 구현됐다고 말하려면 최소한 아래가 가능해야 한다.
 
-- 같은 PR diff에서 agent-assisted hunk와 human hunk를 분리해 표시한다.
-- 사용자가 hunk 판정을 수정하면 다음 생성부터 그 판정이 우선한다.
+- 사용자나 외부 에이전트가 만든 변경이 `target_added` event로 `targets.jsonl`에 들어가고, `active-targets.json`이 그 입력에서 재생성된다.
+- 사용자가 provenance를 정정하면 `target_superseded` 또는 새 `target_added`로 기록되고, 이후 흐름에서 정정된 값이 우선한다.
 - replay mode에서 원본 solution을 제출 전까지 숨긴다.
-- Standard 이상 검증을 통과한 카드만 FSRS 큐에 저장한다.
-- secret 후보 hunk가 cloud 경로로 가지 않는다는 테스트가 있다.
-- `.codereplay/` 디렉터리만으로 provenance, 카드, concept, review log를 export할 수 있다.
+- 표준 검증을 통과한 review card만 spaced review due 계산에 들어간다.
+- fast mode 결과는 review card로 저장되지 않고 spaced review 일정에도 들어가지 않는다.
+- secret 후보가 cloud 경로로 가지 않는다는 테스트가 있다.
+- `.codereplay/` 디렉터리만으로 target log, replay/card, review log를 export할 수 있다.
 
 ## Sources
 
+- 로컬 출처: `docs/product-direction.md`
+- 로컬 출처: `docs/mvp-spec.md`
 - 로컬 출처: `docs/topic.md`
 - 로컬 출처: `docs/ast-diff-tools.md`
 - 로컬 출처: `docs/local-vs-api-llm.md`

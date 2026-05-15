@@ -111,7 +111,7 @@
 | AI 사용 시 quiz 점수 -17% | 산출물 핵심 KPI를 "속도"가 아니라 **개념 retention** 측정으로 잡기 |
 | "코드+설명 요청" 그룹이 순수 delegate보다 나음 | 단순 요약 X, **Socratic prompt + 본인 답변 입력**까지 강제 |
 | structured unassisted practice 처방 | "재구현 과제"는 AI 솔루션을 가리고 본인이 짜게 한 뒤 비교. **AI 차단 모드** 필수 |
-| 88% character retention(=받은 코드 그대로 commit) | 입력은 git diff/PR이지만, 학습 지점 추출은 **diff에서 본인이 안 짠 부분에 가중치** |
+| 88% character retention(=받은 코드 그대로 commit) | 입력은 사용자가 명시적으로 전달한 agent-assisted **target**으로 한정 (Code Replay는 도구가 diff에서 작성 주체를 추론하지 않음) |
 | METR 신호 진동 | 생산성 narrative와 거리 두기. retention narrative만 사용 |
 | ACM TechBrief / vibe coding mainstream화 | 1차 페르소나(숙련 dev) 외에 2차(vibe coder) narrative 준비 |
 

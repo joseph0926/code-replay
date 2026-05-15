@@ -1,14 +1,20 @@
-# LLM 생성 학습 카드 hallucination: 검증 파이프라인 설계
+# LLM 생성 review card hallucination: 검증 파이프라인 설계
 
 리서치 일자: 2026-05-15
-스코프: `docs/learning-metrics.md` §8 미해결 — "카드 자동 생성 품질 검증 부재. LLM이 만든 quiz의 정답/distractor가 옳다는 보장이 없으면 retention metric 자체가 오염됨." `docs/learning-science.md` §7의 "AI가 생성한 retrieval question의 품질 측정. +16pp 결과는 인간 검수 없이도 재현되는가?"와 같은 미해결. **MVP 카드 생성 파이프라인이 어떤 검증 단계를 필수로 둘지** 결정한다.
+스코프: P0 review card(`fill_blank`, `explain_decision`) 생성 시 어떤 검증 단계를 필수로 둘지 결정한다. `docs/product-direction.md`의 "검증되지 않은 card는 spaced review 큐에 저장하지 않는다" 원칙과 `docs/mvp-spec.md`의 품질 게이트를 기술 차원에서 보강한다.
+
+## 현재 결정 기준
+
+- 산출물은 `replay task`와 `review card`로 분리한다. `review card`는 P0에서 `fill_blank`와 `explain_decision` 두 타입만 사용한다.
+- verified card만 spaced review due 계산에 들어간다. `verified: false`인 card는 저장될 수 있지만 due 계산에는 포함하지 않는다.
+- `fast mode`는 즉석 연습용으로만 사용한다. 검증 전 결과는 review card로 자동 승격하지 않고 spaced review 일정에도 넣지 않는다.
 
 ## 한 줄 결론
 
-- **단일 패스 LLM 카드 생성은 사용 금지**. 학계 baseline 에러율 **20-30%** (GPT-3.5 AP Stats 기준 23-29%)이라 single-pass 출력은 retention 측정 자체를 오염.
-- **MVP 필수 검증 4단**: (1) **AST 결정적 검증** (code 카드, 100% 정밀도 가능, arxiv 2601.19106) → (2) **QA round-trip** (LLM이 자기 빈칸을 풀 수 있어야 통과) → (3) **다른 모델/온도로 self-verification** → (4) **사용자 1-click "잘못된 카드" 피드백** = human-in-the-loop.
-- **Distractor는 overgenerate-and-rank**. 단발 4지 선다 생성 X. 8-12개 후보 → preference 모델 또는 휴리스틱으로 top-3 선택.
-- **LLM-as-judge는 bias 12종 인지하고 제한적 사용**. 특히 **재구현 채점에서만 사용**, **카드 자체 생성은 결정적 검증 우선**. 같은 모델 self-judge 금지(self-enhancement 5-7% 편향).
+- **단일 패스 LLM card 생성은 사용 금지**. 학계 baseline 에러율 **20-30%** (GPT-3.5 AP Stats 기준 23-29%)이라 single-pass 출력은 retention 측정 자체를 오염.
+- **P0 verified card 게이트**: (1) **AST 결정적 검증** (code 카드, 100% 정밀도 가능, arxiv 2601.19106) → (2) **QA round-trip** (LLM이 자기 빈칸을 풀 수 있어야 통과) → (3) **rubric 충돌 검사** (정답/rubric이 target과 충돌하지 않는지) → (4) **사용자 1-click "잘못된 카드" 피드백** = human-in-the-loop. self-verification(다른 모델/온도)은 P1 강화 후보.
+- **Distractor는 overgenerate-and-rank**. 단발 4지 선다 생성 X. 8-12개 후보 → preference 모델 또는 휴리스틱으로 top-3 선택. P0 `fill_blank`는 정답 1개 + distractor 없는 형태도 허용.
+- **LLM-as-judge는 bias 12종 인지하고 제한적 사용**. P0에서는 reconstruction 자동 채점 자체가 비-목표이고, judge는 P1 reconstruction 채점에서만 fallback으로 사용한다. 같은 모델 self-judge 금지(self-enhancement 5-7% 편향).
 - **목표 메트릭**: 검증 후 카드 에러율 ≤ 10%, 사용자 flag rate ≤ 5% (출고 카드 100개당 5건 이하).
 
 ## 1. Baseline 위험 — 검증 없을 때 무엇이 일어나는가
@@ -130,37 +136,42 @@
 ### 6.3 code-replay에서의 위치
 
 - **카드 자체 정답성 판정엔 안 씀** (AST + QA round-trip이 우선).
-- **재구현 채점**의 (c) LLM judge fallback에서만 사용 (`docs/learning-metrics.md` §4.1c).
+- **reconstruction 자동 채점 자체가 P0 비-목표**다. judge는 P1 reconstruction 채점이 도입될 때 (c) LLM judge fallback에서만 사용한다 (`docs/learning-metrics.md` §4.1c).
 - generator와 judge 모델 분리 (예: generator = Qwen2.5-Coder, judge = Claude Sonnet 4 또는 다른 model).
 - 채점 결과는 **사용자에게 confidence 표시** ("AI 채점 — 본인 검토 권장"), self-grade override 허용.
 
-## 7. code-replay 카드 생성 파이프라인 (구체)
+## 7. code-replay card 생성 파이프라인 (구체)
 
 ```
-INPUT: PR diff + 학습 단위 (개념 노드)
+INPUT: active target (replay task seed) + 학습 포인트
 
-1. Generation (Q5_K_M Qwen2.5-Coder)
-   - 빈칸 위치 후보 생성 (AST 노드 단위)
-   - 각 후보에 카드 (질문, 정답, distractor 8-12개) 생성
+1. Generation
+   - target 내부에서 빈칸 위치 후보 또는 결정 설명 후보 생성 (AST 노드 단위)
+   - 각 후보에 review card 생성 (P0: fill_blank 또는 explain_decision)
 
-2. AST 결정적 검증 (code 카드)
+2. AST 결정적 검증 (fill_blank, code 카드)
    - 정답 토큰을 다시 코드에 삽입 → AST 파싱 → 원본 AST와 동등?
-   - 불일치 시 카드 폐기
+   - 불일치 시 카드 폐기 또는 verified: false 저장
 
 3. QA round-trip (모든 카드)
-   - 다른 LLM 호출 또는 다른 온도/seed로 빈칸 풀이
-   - k=3 sampling, 다수결 답이 정답과 AST 동등?
-   - 불일치 시 카드 폐기 (모호 / tautology)
+   - 다른 LLM 호출 또는 다른 온도/seed로 빈칸 풀이 / 설명 생성
+   - 다수결 답이 정답·rubric과 AST 또는 의미 동등?
+   - 불일치 시 카드 폐기 또는 verified: false 저장
 
-4. Distractor overgenerate-and-rank
-   - 8-12 후보 → 휴리스틱 ranker로 top-3 선택
+4. (선택) Distractor overgenerate-and-rank
+   - 객관식 형태가 필요한 경우에만. 8-12 후보 → 휴리스틱 ranker로 top-3 선택
    - top-3 모두 AST 컴파일 통과 + 정답 type 일치 확인
 
-5. 사용자 노출
+5. 저장 정책
+   - 위 검증을 통과 → verified: true. spaced review due 계산 대상.
+   - 검증 실패 → verified: false. 저장은 가능하지만 due 계산에 포함하지 않음.
+   - fast mode 결과는 review card로 저장하지 않고 spaced review 일정에도 넣지 않음.
+
+6. 사용자 노출
    - 카드에 "AI 생성" 배지 + 1-click "잘못된 카드" 버튼
    - flag 시 즉시 큐에서 제외 + 분석용 로그
 
-OUTPUT: .codereplay/cards/<id>.md (FSRS 호환 frontmatter)
+OUTPUT: .codereplay/cards/<id>.md (frontmatter에 verified, target/replay 연결, spaced review metadata 포함)
 ```
 
 ### 7.1 비용
@@ -171,9 +182,9 @@ OUTPUT: .codereplay/cards/<id>.md (FSRS 호환 frontmatter)
 
 ### 7.2 cost-quality 단계
 
-- **Fast mode** (default): 검증 round-trip k=1, distractor 5 후보. 빠르지만 에러율 ~15-20%.
-- **Standard mode**: round-trip k=3, distractor 8-12. 에러율 ~10%.
-- **Strict mode**: round-trip k=5 + cloud judge cross-check. 에러율 ~5% 목표.
+- **Standard mode** (P0 default): round-trip k=3, distractor 8-12. 에러율 ~10%. 통과한 결과만 verified review card로 저장.
+- **Strict mode**: round-trip k=5 + cloud judge cross-check (opt-in). 에러율 ~5% 목표.
+- **Fast mode**: 즉석 연습용. round-trip k=1, distractor 5 후보 정도로 빠르게 만들어 바로 풀 수는 있지만, 검증 전 결과는 review card로 자동 승격하지 않고 spaced review 일정에도 넣지 않는다. 별도 표준 생성 흐름을 통과해야 review card로 저장 가능하다.
 
 ## 8. Human-in-the-Loop (사용자 피드백 루프)
 
@@ -201,7 +212,7 @@ OUTPUT: .codereplay/cards/<id>.md (FSRS 호환 frontmatter)
 - **AST 결정적 검증 언어 커버리지**: arxiv 2601.19106은 Python 200개. **TypeScript/JS/Go/Rust 등에서 같은 정밀도 재현 미검증**. → MVP에서 자체 측정 필요.
 - **QA round-trip의 generator-judge 같은 모델 의존**: 자원 제약 시 같은 모델로 round-trip하면 self-enhancement bias로 모호 질문 못 잡을 가능. → 검증기는 다른 모델 강력 권장 (예: Qwen + DeepSeek-Coder hybrid).
 - **검증을 통과한 카드도 사용자 도메인에서 부적절 가능**: 사용자 코드베이스 convention과 anti-pattern인 정답을 LLM이 줄 수 있음. 사용자 flag 의존도 높음.
-- **fast mode 데이터 오염**: 검증 약한 카드가 spaced 큐에 들어가면 retention metric 신뢰 떨어짐. fast mode는 "저장 X, drill만" 모드로 분리 검토.
+- **fast mode 데이터 오염**: 검증 약한 결과가 spaced review 큐에 들어가면 retention metric 신뢰 떨어짐. P0 정책은 fast mode 결과를 review card로 자동 승격하지 않고 spaced review 일정에도 넣지 않는다 (`docs/product-direction.md`, `docs/mvp-spec.md`).
 - **DPO ranker 학습용 사용자 데이터 보호**: 향후 ranker 학습 시 사용자 flag 데이터를 어떻게 다룰지 (로컬 학습 vs federated). MVP scope에서는 로컬 휴리스틱 ranker만.
 - **judge model API 약관 변동**: cloud judge 사용 시 약관 변경에 따른 재평가 필요 (`docs/local-vs-api-llm.md` §6 참조).
 

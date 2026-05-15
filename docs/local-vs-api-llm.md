@@ -1,7 +1,7 @@
 # 로컬 LLM vs Cloud API: code-replay의 모델 백엔드 선택
 
 리서치 일자: 2026-05-15
-스코프: `docs/diff-to-curriculum.md` §11 미해결 중 두 번째. **입력이 사용자 본인의 개인 PR/diff**라는 특수성 때문에 일반 코딩 어시스턴트의 모델 선택과 트레이드오프가 다르다. 어떤 백엔드를 default로 둘지 결정한다.
+스코프: **입력이 사용자 본인의 개인 diff와 target**이라는 특수성 때문에 일반 코딩 어시스턴트의 모델 선택과 트레이드오프가 다르다. 어떤 백엔드를 default로 둘지 결정한다. 현재 결정 기준은 `docs/product-direction.md` Local-first 원칙(기본 로컬, cloud는 명시적 opt-in)을 따른다.
 
 ## 한 줄 결론
 
@@ -12,8 +12,8 @@
 
 ## 1. Privacy 축이 왜 결정적인가
 
-- 입력 = 사용자 repo 전체 또는 PR 패치. **proprietary 코드 / 비공개 secret / 내부 API URL** 노출 위험.
-- 일반 코딩 어시스턴트(코드 한 줄 자동완성)와 달리 **PR 전체를 LLM에 보낸다**. 노출 surface 훨씬 큼.
+- 입력 = 사용자가 명시적으로 전달한 target과 그 주변 diff. **proprietary 코드 / 비공개 secret / 내부 API URL** 노출 위험.
+- 일반 코딩 어시스턴트(코드 한 줄 자동완성)와 달리 **target에 해당하는 코드 블록 전체를 LLM에 보낸다**. 노출 surface 훨씬 큼.
 - 따라서 "model이 강한가" 이전에 "model 공급자가 입력을 어떻게 다루나"가 1순위 결정 기준.
 
 ## 2. Cloud API 비교 (privacy posture)
@@ -78,7 +78,7 @@
 
 ### 4.3 해석
 
-- 개인 사용자 단독은 **API가 단기적으로 저렴**. PR당 학습 자료 생성 토큰량이 작아 월 $5-20 수준 가능.
+- 개인 사용자 단독은 **API가 단기적으로 저렴**. target당 학습 자료 생성 토큰량이 작아 월 $5-20 수준 가능.
 - 팀/조직 단위로 보면 로컬이 시간 누적시 유리.
 - **그러나 code-replay에서 cost는 2순위**. privacy 축이 우선이라 비용 동등하면 로컬.
 
@@ -111,14 +111,14 @@
 
 ### 5.4 안 하는 것
 
-- **사용자 PR 데이터를 code-replay 자체 서버로 보내지 않음.** product가 로컬 CLI/extension으로만 동작. 사용자 → 사용자 선택 LLM(로컬 또는 직접 cloud)으로 직접. **중계 서버 없음** = privacy story 단순.
+- **사용자 diff/target 데이터를 code-replay 자체 서버로 보내지 않음.** P0는 CLI로만 동작한다 (IDE extension은 비-목표). 사용자 → 사용자 선택 LLM(로컬 또는 직접 cloud)으로 직접. **중계 서버 없음** = privacy story 단순.
 
 ## 6. 위험 / 미해결
 
 - **GPU 없는 사용자 UX**: 사양 부족자는 cloud opt-in 강제됨. **API key onboarding 마찰**이 큰 적용 장벽 가능. → 첫 실행 가이드 필요.
 - **양자화 품질 손실**: Q4_K_M / Q5_K_M 양자화에서 fill-in-the-blank 정답 판정 정확도 손실 측정 필요. → 자체 eval 필요.
 - **로컬 모델 학습 컷오프**: 2025년 학습된 모델이 2026년 새 라이브러리(React 19+, Next 15+ 등)를 모를 수 있음. retrieval / docs context 보강 필요.
-- **AI vs human 작성 구분 신호로서 모델 출력은 못 씀**: 로컬/cloud 어느 쪽이든 "AI가 짠 코드 같다"는 판정은 AST/blame 기반(`docs/ast-diff-tools.md` §5)이지 LLM 자체 판정 아님.
+- **agent-assisted 판정에 모델 출력을 쓰지 않는다**: 로컬/cloud 어느 쪽이든 "AI가 짠 코드 같다"고 LLM이 추론한 판정은 사용하지 않는다. `agent-assisted`는 사용자나 외부 연동이 명시적으로 전달한 provenance 속성이며(`docs/product-direction.md`, `docs/ast-diff-tools.md` §5), LLM은 그 입력을 받아 학습 산출물로 변환하는 역할만 한다.
 - **OpenAI ZDR 사전 승인 절차**가 개인 사용자에게 사실상 불가. OpenAI를 default cloud로 쓰면 30일 retention 노출 → narrative 약함.
 - **API 약관 변경 리스크**: 7일 / no-training은 정책이라 향후 변경 가능. 정기 검토 필요.
 

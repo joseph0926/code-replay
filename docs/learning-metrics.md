@@ -1,25 +1,32 @@
 # 학습 효과 metric 방법론: code-replay에서 무엇을, 어떻게 측정할 것인가
 
 리서치 일자: 2026-05-15
-스코프: `docs/diff-to-curriculum.md` §11 미해결 중 세 번째이자 **product 차원에서 가장 중요한 미해결**(다른 두 문서에서도 반복 미해결로 언급). PR 단위 학습 도구의 효과를 product 안에서 어떻게 정량 측정할지 결정. 사용자에게 보일 metric과 내부 분석용 metric을 분리한다.
+스코프: code-replay의 학습 효과를 product 안에서 어떻게 정량 측정할지 결정. 사용자에게 보일 metric과 내부 분석용 metric을 분리한다. 4계층 metric 구조는 장기 설계이며, 각 계층의 P0/P1/P2 위치는 `docs/product-direction.md` non-goals와 `docs/mvp-spec.md` non-goals를 기준으로 본다.
+
+## 현재 결정 기준
+
+- P0는 verified review card의 spaced review를 중심으로 한 단순 카드 계층 metric에 한정한다.
+- reconstruction 자동 채점, transfer 자동 감지, longitudinal dashboard는 P0의 비-목표이며 P1/P2에서 검토한다.
+- concept graph 자체는 P0에서 만들지 않는다. P0의 `concept`은 단순 label/id이며, 그 위에 mastery 합산을 얹는다.
+- 사용자 노출은 P0에서 최소 형태(예: due card 수, 검증된 카드 수)로 시작하고, dashboard/시각화는 후속 단계의 선택지로 둔다.
 
 ## 한 줄 결론
 
-- **4계층 metric 구조**: card retention (SRS 정확도) → concept mastery (개념 단위 합산) → reconstruction accuracy (재구현 결과 정합도) → transfer (새 PR에서 같은 개념 자동 해결률).
+- **장기 4계층 metric 구조**: card retention (SRS 정확도) → concept mastery (개념 단위 합산) → reconstruction accuracy (재구현 결과 정합도) → transfer (사용자가 같은 개념을 다른 변경에서 다시 자력 처리했는가). P0는 card 계층, P1은 concept mastery + reconstruction 채점, P2는 transfer 감지와 longitudinal trend다.
 - **카드 계층은 학계 표준 그대로 사용**: FSRS의 Log Loss / RMSE / RMSE(bins). 9,999 collection / 3.5억 review 벤치마크로 검증된 metric.
-- **재구현 계층은 AST 동등성 + 테스트 통과율 + LLM-as-judge fallback** 3단 합산. GitLab Copilot eval 패턴(테스트 도입 → 통과율) + G-Eval(LLM 평가) hybrid.
-- **Transfer 계층이 product 차원에서 가장 강력한 신호**: 같은 개념이 다른 PR/파일에서 다시 등장했을 때 사용자가 미흡 없이 처리했는가. 이게 *진짜* 학습 효과의 ground truth에 가장 가깝다.
+- **재구현 계층(P1)은 AST 동등성 + 테스트 통과율 + LLM-as-judge fallback** 3단 합산.
+- **Transfer 계층(P2)이 product 차원에서 가장 강력한 신호**지만 자동 감지는 P0 비-목표다.
 - **속도(타이핑 시간 등)는 측정하지 않음**: `docs/ai-learning-impact.md` §1의 METR 시그널 진동에서 본 것처럼 속도 narrative와 거리 둠.
-- **사용자 노출은 단순 1개 score("이번 주 mastery 73%")**, 4계층 분해는 내부 분석용. 정보 과부하로 행동 변화 못 만들면 무효.
+- **사용자 노출은 P0에서 최소화**한다. dashboard 형태는 P2 후보이며 P0에서는 검증된 카드 수, due card 수처럼 단순 CLI 요약에 한정한다.
 
 ## 1. 측정 4계층
 
-| 계층 | 단위 | 무엇을 측정 | 측정 시점 | 신뢰도 |
-|---|---|---|---|---|
-| Card | 단일 quiz/빈칸 카드 | 다음 review 시 정답 확률 vs 실제 결과 | 매 review | 매우 높음 (FSRS 표준) |
-| Concept | 개념 노드 (e.g., "useMemo의 stale closure 회피") | 해당 개념의 모든 카드 평균 mastery | 카드 review 시 자동 갱신 | 높음 (카드 합산) |
-| Reconstruction | "처음부터 재구현" 과제 1회 | AST 동등성 + 테스트 통과율 + LLM judge | 사용자가 재구현 제출 시 | 중 (AST 동등 ≠ 의미 동등 케이스 존재) |
-| Transfer | 새 PR에서 같은 개념 등장 | 사용자가 hint/AI 의존 없이 처리했는가 | 새 PR 분석 시 자동 감지 | 가장 높음 (real-world 신호) |
+| 계층 | 단위 | 무엇을 측정 | 측정 시점 | 신뢰도 | P0/P1/P2 |
+|---|---|---|---|---|---|
+| Card | 단일 verified review card | 다음 review 시 정답 확률 vs 실제 결과 | 매 review | 매우 높음 (FSRS 표준) | P0 |
+| Concept | 개념 label/id (e.g., "useMemo의 stale closure 회피") | 해당 label의 모든 verified card 평균 mastery | 카드 review 시 자동 갱신 | 높음 (카드 합산) | P1 |
+| Reconstruction | replay task 1회 | AST 동등성 + 테스트 통과율 + LLM judge | 사용자가 replay 제출 시 | 중 (AST 동등 ≠ 의미 동등 케이스 존재) | P1 |
+| Transfer | 다른 target에서 같은 concept 등장 | 사용자가 hint/AI 의존 없이 처리했는가 | 후속 target 분석 시 자동 감지 | 가장 높음 (real-world 신호) | P2 |
 
 ## 2. Card 계층 — FSRS 표준 그대로
 
@@ -37,32 +44,32 @@
 
 ### 2.3 적용
 
-- 모든 빈칸/quiz를 FSRS 카드로 모델링.
-- review 결과를 1(정답)/0(오답) + 응답 시간으로 기록.
+- 모든 verified review card를 FSRS 카드로 모델링한다. `verified: false` card는 due 계산에 포함하지 않는다.
+- review 결과를 1(정답)/0(오답) + 응답 시간으로 기록한다 (`.codereplay/reviews/review-log.jsonl`).
 - FSRS가 다음 review 일자 + 예측 retention 출력.
 - **이 카드 계층 metric은 product 내부 운영용** (스케줄러 자체 평가). 사용자에게 직접 노출은 §7에서.
 
-## 3. Concept 계층 — 카드 합산
+## 3. Concept 계층 — 카드 합산 (P1)
 
 ### 3.1 정의
 
-- 한 PR에서 추출된 개념 노드 K개에 대해, 각 노드는 1개 이상의 카드와 연결.
-- 노드 mastery = 노드에 묶인 카드들의 **predicted retention 가중 평균** (카드 수가 많은 노드에 가중치).
+- 한 target에서 추출된 concept label K개에 대해, 각 label은 1개 이상의 verified card와 연결.
+- label mastery = 그 label에 묶인 verified card들의 **predicted retention 가중 평균** (카드 수가 많은 label에 가중치).
 
 ### 3.2 의미
 
-- 개념 단위로 "이 개념은 안정 상태인가" 판정.
+- label 단위로 "이 개념은 안정 상태인가" 판정.
 - mastery > 0.9 = 안정 / 0.7-0.9 = 유지 review 필요 / < 0.7 = 다시 학습 필요.
 - 임계값은 사용자별/도메인별 보정 필요(초기엔 default).
 
 ### 3.3 활용
 
-- 사용자 dashboard "개념 N개 학습 중, M개 안정". 가장 자연스러운 progress UX.
-- 새 PR 분석 시 "이 PR에는 안정 안 된 개념 X개가 들어 있음 → 우선순위 review" 알림.
+- 사용자 노출(P2 후보): "개념 N개 학습 중, M개 안정". dashboard 형태는 P0의 비-목표.
+- 새 target 처리 시 "이 변경에는 안정 안 된 concept X개가 들어 있음 → 우선순위 review" 알림(P1 이후).
 
-## 4. Reconstruction 계층 — 재구현 정합도
+## 4. Reconstruction 계층 — 재구현 정합도 (P1)
 
-P0 산출물 "처음부터 재구현"의 자동 채점.
+`replay task` 결과의 자동 채점은 **P0 비-목표**다. P0에서 reconstruction은 사용자가 직접 비교·자가 채점하는 형태로 두고, 자동 채점은 P1에서 도입한다.
 
 ### 4.1 측정 방식 (3단 hybrid)
 
@@ -93,14 +100,15 @@ reconstruction_score = w_a * AST_equivalence + w_b * test_pass_rate + w_c * llm_
 - **G-Eval (NLG eval with GPT-4)**: 메트릭 design 패턴, task-specific rubric LLM 평가.
 - **HumanEval/MBPP** 한계: 자동 채점만 → context-sensitive 오류 놓침. **전문 환경에선 인간 검토 병행 필요** → 사용자 자기 검증 루프 정당화.
 
-## 5. Transfer 계층 — 가장 결정적인 신호
+## 5. Transfer 계층 — 가장 결정적인 신호 (P2)
 
 ### 5.1 정의
 
-- 한 PR에서 학습한 개념 X가, **시간이 지나 다른 PR/파일에서 다시 등장**했을 때, 사용자가 외부 도움 없이 처리했는가.
+- 한 target에서 학습한 concept X가, **시간이 지나 다른 target에서 다시 등장**했을 때, 사용자가 외부 도움 없이 처리했는가.
+- 자동 감지는 P0 비-목표이며 P2에서 검토한다.
 - "외부 도움 없음"의 신호:
-  - AI assistant 호출 없이 commit 완료
-  - 같은 개념 카드의 review 점수 안정
+  - 사용자가 새 target을 만들지 않고 직접 처리한 흐름
+  - 같은 concept 카드의 review 점수 안정
   - 코드 리뷰에서 같은 종류 코멘트 받지 않음
 
 ### 5.2 분류 — 학계 정의 매핑
@@ -108,13 +116,15 @@ reconstruction_score = w_a * AST_equivalence + w_b * test_pass_rate + w_c * llm_
 - **Near transfer**: 같은 라이브러리/같은 패턴, 다른 파일/feature. (예: `useMemo` 한 컴포넌트에서 학습 → 다른 컴포넌트에서 같은 패턴 적용)
 - **Far transfer**: 같은 개념의 추상화, 다른 domain. (예: React `useMemo` memoization 학습 → 백엔드 caching 결정에 동일 mental model 적용) — 자동 측정 어려움. 사용자 자기보고에 의존.
 
-### 5.3 자동 감지 알고리즘 (초안)
+### 5.3 자동 감지 알고리즘 (P2 초안)
 
-1. 새 PR 분석 → 등장 개념 노드 추출.
-2. 기존 학습 큐에 같은 노드 있는지 매칭.
+1. 새 target 처리 → 등장 concept label 추출.
+2. 기존 학습 큐에 같은 label 있는지 매칭.
 3. 매칭 시:
-   - PR commit이 AI assistance 신호 약함 + 코드 리뷰 코멘트 없음 + 카드 mastery > 0.7 → **transfer success**.
-   - AI assistance 강함 또는 mastery 낮음 → 미전이 → 학습 큐 우선순위 상향.
+   - 사용자가 그 변경을 새 target으로 등록하지 않고 통과 + 같은 concept 카드 mastery > 0.7 → **transfer success**.
+   - 같은 변경이 다시 target으로 등록되거나 mastery 낮음 → 미전이 → 학습 큐 우선순위 상향.
+
+전제: Code Replay는 commit 자체의 agent-assisted 여부를 추론하지 않는다. 위 "외부 도움 없음" 신호는 사용자나 외부 연동이 명시적으로 표시한 provenance에 의존한다.
 
 ### 5.4 의미
 
@@ -140,18 +150,23 @@ reconstruction_score = w_a * AST_equivalence + w_b * test_pass_rate + w_c * llm_
 
 ## 7. 사용자에게 보일 metric vs 내부
 
-### 7.1 사용자 노출 (1-2개)
+### 7.1 P0 사용자 노출
 
-- **"이번 주 학습 안정 개념 / 전체 학습 중 개념"** — 73 / 120 같은 단순 분수.
-- (선택) **"7일 transfer 성공률"** — "지난 7일 새 PR의 학습 개념 중 X%를 도움 없이 처리".
+- CLI 기반 단순 요약: 검증된 카드 수, due 카드 수, 최근 review 결과 정도.
+- dashboard 형태나 longitudinal trend 시각화는 P0의 비-목표(`docs/product-direction.md` non-goals). P2 후보.
+
+### 7.2 P1+ 사용자 노출
+
+- **"이번 주 학습 안정 concept / 전체 학습 중 concept"** — 73 / 120 같은 단순 분수.
+- (선택) **"7일 transfer 성공률"** — "지난 7일 새 target의 학습 concept 중 X%를 도움 없이 처리". 자동 감지가 갖춰진 P2 이후.
 - 그 이상은 정보 과부하. **행동 변화 만들 수 있는 단순 score 1개**가 우선.
 
-### 7.2 내부 / power user
+### 7.3 내부 / power user
 
-- 카드 RMSE, 개념 mastery 분포, 재구현 점수 trend, transfer 매트릭스 등을 별도 detail view로 분리.
+- 카드 RMSE, concept mastery 분포, reconstruction 점수 trend, transfer 매트릭스 등을 별도 detail view로 분리.
 - power user 옵션이지 default 아님.
 
-### 7.3 안 보이는 것
+### 7.4 안 보이는 것
 
 - 속도 (타이핑/완료 시간) — `docs/ai-learning-impact.md` §1 narrative 일관성.
 - 다른 사용자와 비교 — privacy + 동기 측면 부정적.
@@ -166,13 +181,13 @@ reconstruction_score = w_a * AST_equivalence + w_b * test_pass_rate + w_c * llm_
 - **개념 노드 동일성 판정**: 같은 개념인지 판정이 틀리면 transfer 측정 망가짐. → embedding similarity + 인간 라벨 hybrid.
 - **Privacy**: 모든 metric이 로컬에 머물러야 함. cloud에 retention 데이터 보내지 않음 (`docs/local-vs-api-llm.md` §5.4).
 
-## 9. MVP에서 무엇을 만들 것인가
+## 9. 단계별 적용
 
 | 시점 | 만든다 | 만들지 않는다 |
 |---|---|---|
-| MVP P0 | 카드 계층 (FSRS) + Concept mastery 합산 + 사용자 노출 score 1개 | reconstruction 자동 채점, transfer 자동 감지 |
-| MVP P1 | 재구현 채점 (AST 동등성 + LLM judge), reconstruction trend | transfer 자동 감지 |
-| MVP P2 | Transfer 자동 감지, longitudinal trend dashboard | 인구 cohort, 외부 leaderboard |
+| P0 | verified card 계층(FSRS) + due 카드 수/검증된 카드 수 CLI 요약 | concept mastery 합산, reconstruction 자동 채점, transfer 자동 감지, dashboard |
+| P1 | concept mastery 합산, reconstruction 채점(AST 동등성 + LLM judge), reconstruction trend | transfer 자동 감지, longitudinal dashboard |
+| P2 | transfer 자동 감지, longitudinal trend dashboard | 인구 cohort, 외부 leaderboard |
 
 ## Sources
 
