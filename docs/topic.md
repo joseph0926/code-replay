@@ -40,6 +40,13 @@ AI가 코드를 대부분 작성하면 결과물은 빨리 나오지만, 내가 
 - `docs/learning-science.md` — generation effect / retrieval practice / spaced repetition / Parsons / 코드 읽기 vs 쓰기 실증 근거. MVP 6개 산출물의 P0/P1/P2 배치 정당화.
 - `docs/ai-learning-impact.md` — METR 2025-2026 시리즈, AI 사용 시 quiz -17%, Augmentation Trap, vibe coding 연구. 시장 정당화와 narrative 카드.
 - `docs/diff-to-curriculum.md` — diff → 학습 자료 변환의 기술 빌딩 블록(AST, KG, OSS), prior art, gap analysis, MVP 기술 스택 후보.
+- `docs/ast-diff-tools.md` — 구조 diff 백엔드와 AI vs human 작성 구분의 입력 신호.
+- `docs/local-vs-api-llm.md` — private PR/diff 입력을 고려한 로컬 LLM default와 cloud opt-in 경계.
+- `docs/learning-metrics.md` — card retention, concept mastery, reconstruction, transfer 4계층 metric.
+- `docs/quantization-impact.md` — 로컬 LLM 양자화가 카드 생성, judge, structured output에 주는 영향.
+- `docs/llm-quiz-hallucination.md` — LLM 생성 카드의 hallucination 방지와 검증 파이프라인.
+- `docs/concept-identity.md` — PR 간 같은 개념을 같은 노드로 묶는 entity resolution / active learning 설계.
+- `docs/agent-integration.md` — Codex / Claude Code provenance 수집, replay mode 권한 경계, skill/plugin 통합 전략.
 - `docs/alternative.md` — 시장 대안과 빈 자리.
 
 ## 참고
